@@ -1,284 +1,200 @@
-﻿# Stage 1: REST API Design for Notification System
+﻿# Stage 4: Performance Improvement Strategies
 
-## Overview
+## Problem Statement
 
-The notification system is used to send and manage notifications for users.
+Currently, notifications are fetched from the database every time a student loads the page.
 
-Users can:
-- Create notifications
-- View notifications
-- Mark notifications as read
-- Delete notifications
-- Receive real-time updates using WebSocket
+Because of this:
+- Database requests increase heavily
+- Server load becomes high
+- Response time becomes slower
+- User experience becomes poor
 
----
-
-## Main APIs
-
-### 1. Create Notification
-
-**Endpoint:** `POST /notifications`
-
-Used to create a new notification for a user.
-
-### Example Request
-
-```json
-{
-  "userId": "user-123",
-  "title": "Placement Update",
-  "message": "Interview scheduled tomorrow",
-  "type": "info",
-  "priority": "high"
-}
-```
+When thousands of students access the system at the same time, the database gets overwhelmed.
 
 ---
 
-### 2. Get Notifications
+## Solution 1: Caching
 
-**Endpoint:** `GET /notifications`
+### Idea
 
-Used to fetch notifications with filters like:
-- read/unread
-- notification type
-- pagination
+Store frequently accessed notifications in a cache instead of querying the database repeatedly.
 
----
+### Recommended Tool
+- Redis
 
-### 3. Mark Notification as Read
+### Flow
 
-**Endpoint:** `PATCH /notifications/:id/read`
-
-Updates notification status from unread to read.
-
----
-
-### 4. Delete Notification
-
-**Endpoint:** `DELETE /notifications/:id`
-
-Used to remove a notification.
+1. User opens notification page
+2. Server first checks Redis cache
+3. If data exists → return cached data
+4. Otherwise fetch from DB and store in cache
 
 ---
 
-### 5. Real-Time Notifications
+### Advantages
 
-**Endpoint:** `WebSocket /notifications/stream`
+- Faster response time
+- Reduces database load
+- Improves user experience
 
-WebSocket helps users receive notifications instantly without refreshing the page.
+### Tradeoffs
 
----
-
-## Error Handling
-
-### 400 – Bad Request
-Invalid request data.
-
-### 401 – Unauthorized
-Invalid or expired token.
-
-### 404 – Not Found
-Notification not available.
-
-### 500 – Internal Server Error
-Unexpected server issue.
+- Extra memory usage
+- Cache invalidation becomes important
+- Slight complexity increase
 
 ---
 
-# Stage 2: Database Schema and Persistence
+## Solution 2: Pagination
 
-## Database Choice
+### Idea
 
-I selected **PostgreSQL** because:
+Instead of loading all notifications, fetch only limited records.
 
-- Reliable and secure
-- Supports JSON data
-- Good query performance
-- Handles large-scale data efficiently
-
-MongoDB was also considered, but PostgreSQL is better here because notifications follow a structured format.
-
----
-
-## Main Tables
-
-### Users Table
-
-Stores user information like:
-- id
-- email
-- name
-
----
-
-### Notifications Table
-
-Stores notification details like:
-- title
-- message
-- type
-- priority
-- read status
-- timestamps
-
-### Example Table
+### Example
 
 ```sql
-CREATE TABLE notifications (
-  id UUID PRIMARY KEY,
-  user_id UUID NOT NULL,
-  title VARCHAR(200),
-  message TEXT,
-  type VARCHAR(20),
-  priority VARCHAR(10),
-  is_read BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+SELECT id, title, message, created_at
+FROM notifications
+WHERE user_id = 1042
+ORDER BY created_at DESC
+LIMIT 20 OFFSET 0;
 ```
 
 ---
 
-## Important Indexes
+### Advantages
+
+- Smaller query result
+- Faster loading
+- Reduced server stress
+
+### Tradeoffs
+
+- User must load more pages for older notifications
+- Slight frontend handling needed
+
+---
+
+## Solution 3: Lazy Loading / Infinite Scroll
+
+### Idea
+
+Load notifications only when the user scrolls down.
+
+Initially:
+- Load first 20 notifications
+- Fetch more only when required
+
+---
+
+### Advantages
+
+- Better performance
+- Less unnecessary data fetching
+- Smooth user experience
+
+### Tradeoffs
+
+- More frontend implementation
+- Requires API coordination
+
+---
+
+## Solution 4: WebSocket for Real-Time Updates
+
+### Problem with Current Approach
+
+Currently, students repeatedly reload the page to check new notifications.
+
+This increases unnecessary database queries.
+
+---
+
+### Better Approach
+
+Use WebSocket for real-time updates.
+
+### Flow
+
+1. Client connects using WebSocket
+2. Server pushes new notifications instantly
+3. No repeated API polling needed
+
+---
+
+### Advantages
+
+- Real-time experience
+- Reduces repeated database hits
+- Faster notification delivery
+
+### Tradeoffs
+
+- WebSocket setup is more complex
+- More server memory usage for active connections
+
+---
+
+## Solution 5: Database Indexing
+
+### Add Proper Indexes
 
 ```sql
 CREATE INDEX idx_notifications_user_created
 ON notifications(user_id, created_at DESC);
 ```
 
-### Why indexes are needed?
+---
 
-Indexes improve:
-- search speed
-- filtering
-- sorting performance
+### Advantages
 
-Especially useful when millions of notifications are stored.
+- Faster filtering
+- Faster sorting
+- Improved query performance
+
+### Tradeoffs
+
+- Slightly slower INSERT and UPDATE operations
+- Extra storage required for indexes
 
 ---
 
-## Scalability Challenges and Solutions
+## Solution 6: Read Replicas
 
-### Problem 1: Huge Notification Data
+### Idea
 
-As users increase, notification records grow rapidly.
+Use separate database replicas for read operations.
 
-### Solution
+### Flow
 
-Use **table partitioning** and archive old data.
-
----
-
-### Problem 2: Slow Queries
-
-### Solution
-
-Use composite indexes like:
-
-```sql
-(user_id, created_at)
-```
-
-This helps fetch notifications quickly.
+- Primary DB handles writes
+- Replica DB handles reads
 
 ---
 
-### Problem 3: High Write Traffic
+### Advantages
 
-### Solution
+- Reduces load on main database
+- Better scalability
+- Supports large number of users
 
-Use:
-- connection pooling
-- read replicas
-- optimized PostgreSQL configuration
+### Tradeoffs
 
----
-
-# Stage 3: Query Performance Analysis and Optimization
-
-## Original Query
-
-```sql
-SELECT * FROM notifications
-WHERE studentID = 1042 AND isRead = false
-ORDER BY createdAt DESC;
-```
+- Infrastructure cost increases
+- Replica synchronization delay may happen
 
 ---
 
-## Problems in This Query
+## Final Recommended Approach
 
-### 1. Full Table Scan
+Best performance can be achieved by combining:
 
-Without indexes, PostgreSQL checks all rows.
+- Redis caching
+- Pagination
+- WebSocket updates
+- Proper indexing
+- Read replicas
 
-### 2. Using `SELECT *`
-
-Fetches unnecessary columns and increases load.
-
-### 3. Sorting Cost
-
-Sorting large data without index becomes slow.
-
----
-
-## Optimized Query
-
-```sql
-SELECT id, title, message, created_at
-FROM notifications
-WHERE student_id = 1042
-AND is_read = FALSE
-ORDER BY created_at DESC
-LIMIT 50;
-```
-
----
-
-## Improvements Made
-
-- Avoided `SELECT *`
-- Added `LIMIT`
-- Used proper indexing
-- Reduced unnecessary data fetching
-
----
-
-## Best Index for This Query
-
-```sql
-CREATE INDEX idx_notif_student_unread
-ON notifications(student_id, is_read, created_at DESC);
-```
-
-This improves:
-- filtering speed
-- sorting speed
-- query execution time
-
----
-
-## Why We Should Not Index Every Column
-
-Indexing every column is not recommended because:
-
-- Slows down INSERT and UPDATE operations
-- Consumes more storage
-- Increases maintenance overhead
-
-### Best Practice
-
-Only index frequently searched columns.
-
----
-
-## Final Conclusion
-
-The notification system is designed to be:
-
-- scalable
-- fast
-- real-time enabled
-- optimized for large datasets
-
-Using PostgreSQL, indexing, partitioning, and WebSocket makes the system efficient even when handling millions of notifications.
+This reduces database overload and provides a faster and smoother experience for students even when traffic becomes very high.
