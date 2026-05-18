@@ -1,0 +1,10 @@
+{
+  "name": "logging-middleware",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "private": true,
+  "description": "Reusable logging middleware for remote logging server.",
+  "keywords": ["logging", "middleware", "api"],
+  "author": "" 
+}
