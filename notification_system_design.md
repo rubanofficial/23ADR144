@@ -1,200 +1,304 @@
-﻿# Stage 4: Performance Improvement Strategies
+﻿# Notification System Design
 
-## Problem Statement
+# Stage 1: REST API Design
 
-Currently, notifications are fetched from the database every time a student loads the page.
+## Overview
 
-Because of this:
-- Database requests increase heavily
-- Server load becomes high
-- Response time becomes slower
-- User experience becomes poor
+This system helps students receive:
+- placement alerts
+- interview updates
+- announcements
 
-When thousands of students access the system at the same time, the database gets overwhelmed.
-
----
-
-## Solution 1: Caching
-
-### Idea
-
-Store frequently accessed notifications in a cache instead of querying the database repeatedly.
-
-### Recommended Tool
-- Redis
-
-### Flow
-
-1. User opens notification page
-2. Server first checks Redis cache
-3. If data exists → return cached data
-4. Otherwise fetch from DB and store in cache
+Features:
+- create notification
+- fetch notifications
+- mark as read
+- delete notification
+- real-time updates
 
 ---
 
-### Advantages
+## Create Notification
 
-- Faster response time
-- Reduces database load
-- Improves user experience
+```http
+POST /api/notifications
+```
 
-### Tradeoffs
-
-- Extra memory usage
-- Cache invalidation becomes important
-- Slight complexity increase
+```json
+{
+  "userId":"101",
+  "title":"Placement Update",
+  "message":"Interview tomorrow"
+}
+```
 
 ---
 
-## Solution 2: Pagination
+## Get Notifications
 
-### Idea
-
-Instead of loading all notifications, fetch only limited records.
-
-### Example
+```http
+GET /api/notifications?page=1&limit=20
+```
 
 ```sql
-SELECT id, title, message, created_at
+SELECT id,title,message,is_read
 FROM notifications
-WHERE user_id = 1042
+WHERE user_id=$1
 ORDER BY created_at DESC
-LIMIT 20 OFFSET 0;
+LIMIT 20;
 ```
 
 ---
 
-### Advantages
+## Mark as Read
 
-- Smaller query result
-- Faster loading
-- Reduced server stress
-
-### Tradeoffs
-
-- User must load more pages for older notifications
-- Slight frontend handling needed
-
----
-
-## Solution 3: Lazy Loading / Infinite Scroll
-
-### Idea
-
-Load notifications only when the user scrolls down.
-
-Initially:
-- Load first 20 notifications
-- Fetch more only when required
-
----
-
-### Advantages
-
-- Better performance
-- Less unnecessary data fetching
-- Smooth user experience
-
-### Tradeoffs
-
-- More frontend implementation
-- Requires API coordination
-
----
-
-## Solution 4: WebSocket for Real-Time Updates
-
-### Problem with Current Approach
-
-Currently, students repeatedly reload the page to check new notifications.
-
-This increases unnecessary database queries.
-
----
-
-### Better Approach
-
-Use WebSocket for real-time updates.
-
-### Flow
-
-1. Client connects using WebSocket
-2. Server pushes new notifications instantly
-3. No repeated API polling needed
-
----
-
-### Advantages
-
-- Real-time experience
-- Reduces repeated database hits
-- Faster notification delivery
-
-### Tradeoffs
-
-- WebSocket setup is more complex
-- More server memory usage for active connections
-
----
-
-## Solution 5: Database Indexing
-
-### Add Proper Indexes
+```http
+PATCH /api/notifications/:id/read
+```
 
 ```sql
-CREATE INDEX idx_notifications_user_created
-ON notifications(user_id, created_at DESC);
+UPDATE notifications
+SET is_read=TRUE
+WHERE id=$1;
 ```
 
 ---
 
-### Advantages
+## Delete Notification
 
-- Faster filtering
-- Faster sorting
-- Improved query performance
-
-### Tradeoffs
-
-- Slightly slower INSERT and UPDATE operations
-- Extra storage required for indexes
+```http
+DELETE /api/notifications/:id
+```
 
 ---
 
-## Solution 6: Read Replicas
+## Real-Time Notifications
 
-### Idea
+```txt
+ws://localhost:3000/notifications
+```
 
-Use separate database replicas for read operations.
+```js
+ws.send(JSON.stringify(notification));
+```
 
-### Flow
-
-- Primary DB handles writes
-- Replica DB handles reads
-
----
-
-### Advantages
-
-- Reduces load on main database
-- Better scalability
-- Supports large number of users
-
-### Tradeoffs
-
-- Infrastructure cost increases
-- Replica synchronization delay may happen
+This gives instant updates without refreshing.
 
 ---
 
-## Final Recommended Approach
+# Stage 2: Database Design
 
-Best performance can be achieved by combining:
+## Database Choice
 
-- Redis caching
-- Pagination
-- WebSocket updates
-- Proper indexing
-- Read replicas
+PostgreSQL is used because:
+- reliable
+- scalable
+- fast querying
 
-This reduces database overload and provides a faster and smoother experience for students even when traffic becomes very high.
+---
+
+## Notifications Table
+
+```sql
+CREATE TABLE notifications(
+ id UUID PRIMARY KEY,
+ user_id UUID,
+ title VARCHAR(200),
+ message TEXT,
+ is_read BOOLEAN DEFAULT FALSE,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+## Important Index
+
+```sql
+CREATE INDEX idx_user_created
+ON notifications(user_id,created_at DESC);
+```
+
+This improves:
+- filtering
+- sorting
+- fetch speed
+
+---
+
+# Stage 3: Query Optimization
+
+## Old Query
+
+```sql
+SELECT * FROM notifications
+WHERE studentID=1042
+AND isRead=false;
+```
+
+Problems:
+- full table scan
+- unnecessary columns fetched
+
+---
+
+## Optimized Query
+
+```sql
+SELECT id,title,message
+FROM notifications
+WHERE user_id=$1
+AND is_read=FALSE
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+---
+
+## Better Index
+
+```sql
+CREATE INDEX idx_user_read
+ON notifications(user_id,is_read);
+```
+
+---
+
+# Stage 4: Performance Improvements
+
+## Problem
+
+Every refresh hits database.
+
+With many students:
+- DB becomes slow
+- server load increases
+
+---
+
+## Redis Caching
+
+```js
+const cached=await redis.get(`notif:${userId}`);
+```
+
+Benefits:
+- faster response
+- reduced DB load
+
+---
+
+## Pagination
+
+```http
+GET /notifications?page=1&limit=20
+```
+
+Loads only small data at a time.
+
+---
+
+## WebSocket
+
+Instead of polling:
+
+```js
+setInterval(fetchNotifications,5000);
+```
+
+Use:
+
+```js
+ws.send(JSON.stringify(notification));
+```
+
+Benefits:
+- real-time updates
+- lower DB traffic
+
+---
+
+# Stage 5: Bulk Notification System
+
+## Problem
+
+HR sends notifications to 50,000 students.
+
+Old approach:
+
+```python
+for student in students:
+   send_email()
+   save_to_db()
+```
+
+Problems:
+- slow
+- timeout risk
+- failure handling issue
+
+---
+
+## Better Solution
+
+Use:
+- Redis Queue
+- BullMQ Workers
+
+---
+
+## Queue Example
+
+```js
+await queue.add("send-notification",{
+  studentId,
+  message
+});
+```
+
+---
+
+## Worker Example
+
+```js
+worker.process(async(job)=>{
+
+ await saveNotification();
+
+ await sendEmail();
+
+});
+```
+
+---
+
+## Retry Mechanism
+
+```js
+attempts:5
+```
+
+Failed jobs retry automatically.
+
+---
+
+# Final Architecture
+
+| Component | Technology |
+|---|---|
+| Backend | Node.js |
+| Database | PostgreSQL |
+| Cache | Redis |
+| Queue | BullMQ |
+| Real-time | WebSocket |
+
+---
+
+# Final Conclusion
+
+This system provides:
+- fast notifications
+- real-time updates
+- scalable architecture
+- reduced database load
+- reliable bulk notification delivery
